@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -151,13 +152,20 @@ func Query(queryString string, c int, wg *sync.WaitGroup, envFile map[string]str
 				valf, _ := NumericFloat64toFloat64(k)
 				record[i] = strconv.FormatFloat(valf, 'f', 6, 64)
 			case pgtype.Float8OID:
-				t := *(values[i].(*interface{}))
-				record[i] = fmt.Sprintf("%s", strconv.FormatFloat(t.(float64), 'G', 15, 64))
+				rawFloat := *(values[i].(*interface{}))
+				record[i] = fmt.Sprintf(`%s`, strconv.FormatFloat(rawFloat.(float64), 'G', 15, 64))
 			case pgtype.VarcharOID:
 				// fmt.Printf(`"%s`, *(values[i].(*interface{})))
 				record[i] = fmt.Sprintf(`%s`, *(values[i].(*interface{})))
+			case pgtype.TimestampOID:
+				rawts := *(values[i].(*interface{}))
+				if rawts != nil {
+					record[i] = fmt.Sprintf(`%v`, rawts.(time.Time).Format("2006-01-02 15:04:00"))
+				}
+			case pgtype.Int4OID:
+				record[i] = fmt.Sprintf("%d", *(values[i].(*interface{})))
 			default:
-				record[i] = "kosong"
+				record[i] = fmt.Sprintf(`"%#V`, *(values[i].(*interface{})))
 			}
 		}
 
