@@ -147,23 +147,43 @@ func Query(queryString string, c int, wg *sync.WaitGroup, envFile map[string]str
 				// var num pgtype.Numeric
 				// (*values[i]).(float64)
 				t := *(values[i].(*interface{}))
-				k := t.(pgtype.Numeric)
-				// record[i] = fmt.Sprintf("%v", k)
-				valf, _ := NumericFloat64toFloat64(k)
-				record[i] = strconv.FormatFloat(valf, 'f', 6, 64)
+				if t != nil {
+					k := t.(pgtype.Numeric)
+					// record[i] = fmt.Sprintf("%v", k)
+					valf, _ := NumericFloat64toFloat64(k)
+					record[i] = strconv.FormatFloat(valf, 'f', 6, 64)
+				} else {
+					record[i] = "NULL"
+				}
 			case pgtype.Float8OID:
 				rawFloat := *(values[i].(*interface{}))
-				record[i] = fmt.Sprintf(`%s`, strconv.FormatFloat(rawFloat.(float64), 'G', 15, 64))
+				if rawFloat != nil {
+					record[i] = fmt.Sprintf(`%s`, strconv.FormatFloat(rawFloat.(float64), 'G', 15, 64))
+				} else {
+					record[i] = "NULL"
+				}
 			case pgtype.VarcharOID:
 				// fmt.Printf(`"%s`, *(values[i].(*interface{})))
-				record[i] = fmt.Sprintf(`%s`, *(values[i].(*interface{})))
+				varcharraw := *(values[i].(*interface{}))
+				if varcharraw != nil {
+					record[i] = fmt.Sprintf(`%s`, varcharraw)
+				} else {
+					record[i] = "NULL"
+				}
 			case pgtype.TimestampOID:
 				rawts := *(values[i].(*interface{}))
 				if rawts != nil {
 					record[i] = fmt.Sprintf(`%v`, rawts.(time.Time).Format("2006-01-02 15:04:00"))
+				} else {
+					record[i] = "NULL"
 				}
 			case pgtype.Int4OID:
-				record[i] = fmt.Sprintf("%d", *(values[i].(*interface{})))
+				rawint := *(values[i].(*interface{}))
+				if rawint != nil {
+					record[i] = fmt.Sprintf("%d", rawint)
+				} else {
+					record[i] = "NULL"
+				}
 			default:
 				record[i] = fmt.Sprintf(`"%#V`, *(values[i].(*interface{})))
 			}
