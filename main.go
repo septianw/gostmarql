@@ -4,10 +4,16 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/csv"
 	"flag"
 	"fmt"
+	"log"
+	"math"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -56,6 +62,27 @@ func checkEnv(envFile map[string]string) int {
 	return SUCCESS
 }
 
+func NumericFloat64toFloat64(val pgtype.Numeric) (float64, error) {
+	if val.NaN {
+		return math.NaN(), nil
+	}
+
+	// var intValue int64
+
+	intValue, _ := val.Int.Float64()
+
+	// fmt.Println(intValue * math.Pow10(int(val.Exp)))
+
+	// if err := val.Int(&intValue); err != nil {
+	// 	return 0, err
+	// }
+
+	exp := val.Exp
+
+	return intValue * math.Pow10(int(exp)), nil
+	// return 0.0, nil
+}
+
 func ConnectPostgres(ctx context.Context, envFile map[string]string) (*pgx.Conn, error) {
 	var dburl string
 	if strings.Compare(envFile["DBURL"], "") == 0 {
@@ -68,18 +95,115 @@ func ConnectPostgres(ctx context.Context, envFile map[string]string) (*pgx.Conn,
 	return pgx.Connect(ctx, dburl)
 }
 
-func Query(queryString string, envFile map[string]string) {
+func Query(queryString string, c int, wg *sync.WaitGroup, envFile map[string]string) {
+	defer wg.Done()
 	ctx := context.Background()
 	conn, err := ConnectPostgres(ctx, envFile)
 	defer conn.Close(ctx)
 
-	_, err := conn.Query(ctx, queryString)
+	rows, err := conn.Query(ctx, queryString)
 	if err != nil {
 		fmt.Println("Fail to query,", queryString, "error:", err.Error())
 	}
+
+	// Create a CSV file
+	file, err := os.Create(fmt.Sprintf("output-%d.csv", c))
+	if err != nil {
+		log.Fatalf("Failed to create CSV file: %v\n", err)
+	}
+	defer file.Close()
+
+	// Create a CSV writer
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+
+	// Write the header
+	columns := make([]string, len(rows.FieldDescriptions()))
+	for i, field := range rows.FieldDescriptions() {
+		columns[i] = string(field.Name)
+	}
+	if err := writer.Write(columns); err != nil {
+		log.Fatalf("Failed to write header to CSV: %v\n", err)
+	}
+
+	// Write the rows
+	for rows.Next() {
+		record := make([]string, len(columns))
+
+		values := make([]interface{}, len(columns))
+		for i := range values {
+			values[i] = new(interface{}) // Use a pointer to interface{}
+		}
+
+		if err := rows.Scan(values...); err != nil {
+			log.Fatalf("Scan failed: %v\n", err)
+		}
+
+		for i, field := range rows.FieldDescriptions() {
+			oid := field.DataTypeOID
+
+			switch oid {
+			case pgtype.NumericOID:
+				// var num pgtype.Numeric
+				// (*values[i]).(float64)
+				t := *(values[i].(*interface{}))
+				if t != nil {
+					k := t.(pgtype.Numeric)
+					// record[i] = fmt.Sprintf("%v", k)
+					valf, _ := NumericFloat64toFloat64(k)
+					record[i] = strconv.FormatFloat(valf, 'f', 6, 64)
+				} else {
+					record[i] = "NULL"
+				}
+			case pgtype.Float8OID:
+				rawFloat := *(values[i].(*interface{}))
+				if rawFloat != nil {
+					record[i] = fmt.Sprintf(`%s`, strconv.FormatFloat(rawFloat.(float64), 'G', 15, 64))
+				} else {
+					record[i] = "NULL"
+				}
+			case pgtype.VarcharOID:
+				// fmt.Printf(`"%s`, *(values[i].(*interface{})))
+				varcharraw := *(values[i].(*interface{}))
+				if varcharraw != nil {
+					record[i] = fmt.Sprintf(`%s`, varcharraw)
+				} else {
+					record[i] = "NULL"
+				}
+			case pgtype.TimestampOID:
+				rawts := *(values[i].(*interface{}))
+				if rawts != nil {
+					record[i] = fmt.Sprintf(`%v`, rawts.(time.Time).Format("2006-01-02 15:04:00"))
+				} else {
+					record[i] = "NULL"
+				}
+			case pgtype.Int4OID:
+				rawint := *(values[i].(*interface{}))
+				if rawint != nil {
+					record[i] = fmt.Sprintf("%d", rawint)
+				} else {
+					record[i] = "NULL"
+				}
+			default:
+				record[i] = fmt.Sprintf(`"%#V`, *(values[i].(*interface{})))
+			}
+		}
+
+		// Write the record to the CSV
+		if err := writer.Write(record); err != nil {
+			log.Fatalf("Failed to write record to CSV: %v\n", err)
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		log.Fatalf("Row iteration failed: %v\n", err)
+	}
+
+	fmt.Println("Data successfully written to output.csv")
+
 }
 
-func readFile(fileName string, envFile map[string]string) {
+func readFile(fileName string, wg *sync.WaitGroup, envFile map[string]string) {
 	file, err := os.Open(fileName)
 	if err != nil {
 		fmt.Println("Fail to read sql file.", err.Error())
@@ -88,9 +212,13 @@ func readFile(fileName string, envFile map[string]string) {
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
+	c := 0
 	for scanner.Scan() {
+		wg.Add(1)
 		tx := scanner.Text()
-		go Query(tx, envFile)
+		// go fmt.Println(tx)
+		go Query(tx, c, wg, envFile)
+		c++
 	}
 
 	if err = scanner.Err(); err != nil {
@@ -102,6 +230,8 @@ func readFile(fileName string, envFile map[string]string) {
 func main() {
 	var conn *pgx.Conn
 	var err error
+	var wg sync.WaitGroup
+
 	envFile, err := godotenv.Read(".env")
 	if err != nil {
 		fmt.Println("Fail to read Environment file", err.Error())
@@ -127,8 +257,9 @@ func main() {
 		if len(args) == 0 {
 			flag.Usage()
 		} else {
-			readFile(args[0], envFile)
+			readFile(args[0], &wg, envFile)
 		}
 	}
 
+	wg.Wait()
 }

@@ -7,6 +7,10 @@
 *.dll
 *.so
 *.dylib
+gostmarql
+*.7z
+*.zip
+*.tar.gz
 
 # Test binary, built with `go test -c`
 *.test
@@ -20,9 +24,14 @@
 # Go workspace file
 go.work
 go.work.sum
+.~lock*
 
 # env file
 .env
 
 # Keep private of sql file
 *.sql
+*.csv
+
+# Keep private experiments
+exp*
